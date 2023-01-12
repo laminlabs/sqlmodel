@@ -241,11 +241,13 @@ class SQLModelMetaclass(ModelMetaclass, DeclarativeMeta):
         for k, v in class_dict.items():
             if isinstance(v, RelationshipInfo):
                 relationships[k] = v
+                dict_for_pydantic[k] = v
             else:
                 dict_for_pydantic[k] = v
         for k, v in original_annotations.items():
             if k in relationships:
                 relationship_annotations[k] = v
+                pydantic_annotations[k] = v
             else:
                 pydantic_annotations[k] = v
         dict_used = {
@@ -290,6 +292,8 @@ class SQLModelMetaclass(ModelMetaclass, DeclarativeMeta):
             # If it was passed by kwargs, ensure it's also set in config
             new_cls.__config__.table = config_table
             for k, v in new_cls.__fields__.items():
+                if isinstance(v.default, RelationshipInfo):
+                    continue
                 col = get_column_from_field(v)
                 setattr(new_cls, k, col)
             # Set a config flag to tell FastAPI that this should be read with a field
@@ -326,6 +330,8 @@ class SQLModelMetaclass(ModelMetaclass, DeclarativeMeta):
         if getattr(cls.__config__, "table", False) and not base_is_table:
             dict_used = dict_.copy()
             for field_name, field_value in cls.__fields__.items():
+                if isinstance(field_value.default, RelationshipInfo):
+                    continue
                 dict_used[field_name] = get_column_from_field(field_value)
             for rel_name, rel_info in cls.__sqlmodel_relationships__.items():
                 if rel_info.sa_relationship:
@@ -498,11 +504,11 @@ class SQLModel(BaseModel, metaclass=SQLModelMetaclass, registry=default_registry
         values, fields_set, validation_error = validate_model(
             __pydantic_self__.__class__, data
         )
+        for key in list(values.keys()):
+            if key in __pydantic_self__.__sqlmodel_relationships__:
+                del values[key]
         # Only raise errors if not a SQLModel model
-        if (
-            not getattr(__pydantic_self__.__config__, "table", False)
-            and validation_error
-        ):
+        if validation_error:
             raise validation_error
         # Do not set values as in Pydantic, pass them through setattr, so SQLAlchemy
         # can handle them
